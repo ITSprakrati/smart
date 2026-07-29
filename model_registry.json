@@ -1,0 +1,40 @@
+[
+  {
+    "version": 1,
+    "filename": "model_v1.pkl",
+    "trained_at": "2026-07-27T20:20:08.772289+00:00",
+    "trained_on": "training_dataset.csv",
+    "data_source": "simulated",
+    "n_train_rows": 4487,
+    "n_test_rows": 1138,
+    "features": [
+      "fill_level",
+      "fill_rate_per_hour",
+      "hour",
+      "day_of_week"
+    ],
+    "feature_set_label": "BASELINE",
+    "metrics": {
+      "mae_hours": 7.729,
+      "rmse_hours": 9.085,
+      "r2": 0.061
+    },
+    "baseline_metrics_for_comparison": {
+      "mae_hours": 7.729,
+      "rmse_hours": 9.085,
+      "r2": 0.061
+    },
+    "extended_metrics_for_comparison": {
+      "mae_hours": 8.034,
+      "rmse_hours": 9.554,
+      "r2": -0.038
+    },
+    "coefficients": {
+      "fill_level": -0.6258,
+      "fill_rate_per_hour": 0.0229,
+      "hour": -0.0918,
+      "day_of_week": -2.5196
+    },
+    "intercept": 71.153
+  }
+]
