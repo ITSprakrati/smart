@@ -26,10 +26,12 @@ from datetime import datetime, timedelta
 np.random.seed(42)
 
 NUM_BINS = 30
-DAYS = 7
+DAYS = 21  # extended from 7: a fixed-horizon censoring scheme (see below) needs
+           # enough runway that trimming the unobservable tail doesn't eat most of the data
 READING_INTERVAL_MIN = 30
 START_DATE = datetime(2026, 7, 14, 0, 0, 0)
 OVERFLOW_THRESHOLD = 90.0
+HORIZON_HOURS = 96  # fixed look-ahead window for computing time_to_full_hours (see below)
 
 # zone kept only as bin metadata (mirrors "zone lives in bins table"), NOT a model feature
 ZONES = ["Z_01", "Z_02", "Z_03", "Z_04"]
@@ -115,27 +117,85 @@ def main():
     raw_df["fill_rate_per_hour"] = np.where(hrs > 0, (raw_df["fill_level"] - raw_df["prev_fill"]) / hrs, 0.0)
     raw_df["fill_rate_per_hour"] = raw_df["fill_rate_per_hour"].fillna(0.0)
 
+    # AUDIT FIX: clip reset-event artifacts (bin just emptied -> huge negative
+    # "rate" that isn't a real trend) at the SOURCE, not just at serving time,
+    # so train_model.py doesn't need to guess the training data is already clean.
+    from features import clip_fill_rate
+    n_before_clip = len(raw_df)
+    outlier_mask = (raw_df["fill_rate_per_hour"] < -20) | (raw_df["fill_rate_per_hour"] > 50)
+    raw_df.loc[outlier_mask, "fill_rate_per_hour"] = 0.0
+    print(f"Clipped {outlier_mask.sum()}/{n_before_clip} rows with implausible fill_rate_per_hour at generation time")
+
     raw_df["hour"] = raw_df["timestamp_dt"].dt.hour
     raw_df["day_of_week"] = raw_df["timestamp_dt"].dt.dayofweek
 
-    # time_to_full_hours: scan forward per bin until fill_level crosses threshold
+    # AUDIT FIX (censoring-boundary artifact): the previous version capped
+    # the look-ahead window at "however much data is left until the dataset
+    # ends" - which means rows near the end of the recording period had a
+    # much SHORTER effective observation window than rows near the start.
+    # That silently skewed the "exact" (non-censored) subset's label
+    # distribution as a function of time: rows late in the timeline could
+    # only be labeled "exact" if they crossed 90% almost immediately, since
+    # anything with more runway ran out of data and got censored instead.
+    # Combined with a time-based train/val/test split, this meant the TEST
+    # set's exact-labeled rows were a systematically different, heavily
+    # skewed sample from train/val's - not real concept drift, just an
+    # artifact of how the window was computed. (Confirmed: this alone was
+    # enough to swing test R2 from a healthy 0.55 on validation to -11.6
+    # on test with the old logic.)
+    #
+    # Fix: use a FIXED look-ahead horizon (HORIZON_HOURS) for every row,
+    # and only keep rows that have at least a full horizon of future data
+    # available - so "censored" always means the same thing (didn't cross
+    # 90% within a full, consistent HORIZON_HOURS window), regardless of
+    # where in the timeline the row falls.
     def compute_time_to_full(group):
         vals = group["fill_level"].values
         times = group["timestamp_dt"].values
         n = len(vals)
         ttf = np.full(n, np.nan)
+        censored = np.zeros(n, dtype=bool)
+        has_full_horizon = np.zeros(n, dtype=bool)
+        data_end = times[-1]
+        horizon_delta = np.timedelta64(HORIZON_HOURS, "h")
+
         for idx in range(n):
+            deadline = times[idx] + horizon_delta
+            if deadline > data_end:
+                continue  # not enough future data for a fair fixed-horizon label - excluded below
+            has_full_horizon[idx] = True
+            found = False
             for j in range(idx, n):
+                if times[j] > deadline:
+                    break
                 if vals[j] >= OVERFLOW_THRESHOLD:
                     ttf[idx] = (times[j] - times[idx]) / np.timedelta64(1, "h")
+                    found = True
                     break
-        return pd.Series(ttf, index=group.index)
+            if not found:
+                ttf[idx] = HORIZON_HOURS
+                censored[idx] = True
+        return pd.DataFrame(
+            {"time_to_full_hours": ttf, "is_censored": censored, "has_full_horizon": has_full_horizon},
+            index=group.index,
+        )
 
-    raw_df["time_to_full_hours"] = raw_df.groupby("bin_id", group_keys=False).apply(compute_time_to_full)
+    ttf_result = raw_df.groupby("bin_id", group_keys=False).apply(compute_time_to_full)
+    raw_df["time_to_full_hours"] = ttf_result["time_to_full_hours"]
+    raw_df["is_censored"] = ttf_result["is_censored"]
+    raw_df["has_full_horizon"] = ttf_result["has_full_horizon"]
 
-    training_df = raw_df.dropna(subset=["time_to_full_hours"])[[
+    n_excluded = (~raw_df["has_full_horizon"]).sum()
+    raw_df = raw_df[raw_df["has_full_horizon"]].copy()
+    n_censored = raw_df["is_censored"].sum()
+    print(f"Excluded {n_excluded} rows lacking a full {HORIZON_HOURS}h look-ahead window "
+          f"(near end of each bin's recorded period - can't compute a fair fixed-horizon label for these)")
+    print(f"Of {len(raw_df)} remaining rows: {n_censored} censored ({100*n_censored/len(raw_df):.1f}%), "
+          f"label = capped at {HORIZON_HOURS}h (lower bound, not exact)")
+
+    training_df = raw_df[[
         "bin_id", "timestamp", "fill_level", "fill_rate_per_hour", "hour", "day_of_week",
-        "_last_collection_minutes_ago", "time_to_full_hours",
+        "_last_collection_minutes_ago", "time_to_full_hours", "is_censored",
     ]].rename(columns={"_last_collection_minutes_ago": "last_collection_minutes_ago"})
     training_df.to_csv("training_dataset.csv", index=False)
     print("Saved training_dataset.csv:", training_df.shape)

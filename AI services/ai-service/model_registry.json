@@ -2,11 +2,18 @@
   {
     "version": 1,
     "filename": "model_v1.pkl",
-    "trained_at": "2026-07-27T20:20:08.772289+00:00",
+    "trained_at": "2026-08-11T03:46:17.428068+00:00",
     "trained_on": "training_dataset.csv",
     "data_source": "simulated",
-    "n_train_rows": 4487,
-    "n_test_rows": 1138,
+    "n_train_rows_total": 17136,
+    "n_train_rows_exact_used_for_fitting": 16496,
+    "n_val_rows_total": 3672,
+    "n_val_rows_exact": 3556,
+    "n_test_rows_total": 3672,
+    "n_test_rows_exact": 3528,
+    "n_censored_total": 900,
+    "pct_censored_total": 3.7,
+    "outliers_clipped": 0,
     "features": [
       "fill_level",
       "fill_rate_per_hour",
@@ -14,27 +21,43 @@
       "day_of_week"
     ],
     "feature_set_label": "BASELINE",
-    "metrics": {
-      "mae_hours": 7.729,
-      "rmse_hours": 9.085,
-      "r2": 0.061
+    "validation_metrics_exact_only": {
+      "mae_hours": 5.733,
+      "rmse_hours": 11.542,
+      "r2": 0.79
     },
-    "baseline_metrics_for_comparison": {
-      "mae_hours": 7.729,
-      "rmse_hours": 9.085,
-      "r2": 0.061
+    "test_metrics_exact_only_final_honest_estimate": {
+      "mae_hours": 6.369,
+      "rmse_hours": 11.076,
+      "r2": 0.747
     },
-    "extended_metrics_for_comparison": {
-      "mae_hours": 8.034,
-      "rmse_hours": 9.554,
-      "r2": -0.038
+    "censored_diagnostic_not_an_accuracy_metric": {
+      "n_censored_test_rows": 144,
+      "pct_predictions_below_censored_lower_bound": 100.0,
+      "note": "This is NOT an accuracy metric (censored labels are a lower bound, not ground truth). A prediction below the lower-bound label is a clear sign of under-prediction; a low percentage here is reassuring, a high one is a red flag."
+    },
+    "baseline_val_metrics": {
+      "mae_hours": 5.733,
+      "rmse_hours": 11.542,
+      "r2": 0.79
+    },
+    "extended_val_metrics": {
+      "mae_hours": 5.784,
+      "rmse_hours": 11.54,
+      "r2": 0.79
     },
     "coefficients": {
-      "fill_level": -0.6258,
-      "fill_rate_per_hour": 0.0229,
-      "hour": -0.0918,
-      "day_of_week": -2.5196
+      "fill_level": -0.6449,
+      "fill_rate_per_hour": -1.3842,
+      "hour": 0.0225,
+      "day_of_week": 0.213
     },
-    "intercept": 71.153
+    "intercept": 63.6841,
+    "known_limitations": [
+      "4% of rows are right-censored (the bin never reached 90% fill within the recorded window) - these are KEPT in training_dataset.csv with an is_censored flag and a capped (lower-bound) label, but EXCLUDED from model fitting and from the primary reported MAE/RMSE/R2, since training or scoring against a known-wrong lower bound would bias both the model and the metrics. See 'censored_diagnostic_not_an_accuracy_metric' for a directional sanity check on those rows instead.",
+      "Linear Regression cannot represent the sawtooth reset pattern in bin fill data; R2 will remain modest regardless of feature tuning. This matches the team's own risk-mitigation plan, which explicitly names a simpler extrapolation fallback for this case.",
+      "hour/day_of_week are encoded as raw integers, not cyclically (e.g. hour 23 and hour 0 are treated as maximally different). Not fixed here since it likely has small effect vs. the two issues above, and a hackathon-scope linear model has limited room to benefit from it regardless.",
+      "Trained entirely on simulated data. Retrain on real bin_readings as soon as it's available - simulated fill-rate patterns are a guess, not a validated match to real bin behavior."
+    ]
   }
 ]
